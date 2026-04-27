@@ -3,7 +3,6 @@ import plotly.graph_objects as go
 from sentence_transformers import SentenceTransformer, util
 import nltk
 import textwrap
-import csv
 import re
 
 MODELS = {
@@ -20,6 +19,14 @@ KEY_LABELS = {
     "MiniLM (Paraphrase-Tuned Encoder)": "Cosine<br>Similarity",
     "DeBERTaV3 (Paraphrase-Detection Classifier)": "Paraphrase<br>Probability",
     "PD-BERT (Paraphrase-Detection Classifier)": "Paraphrase<br>Probability"
+}
+
+DEFAULT_ZMINS = {
+    "MPNet (Semantic Similarity Encoder)": 0.1,
+    "BGE-M3 (Retrieval-Tuned Encoder)": 0.475,
+    "MiniLM (Paraphrase-Tuned Encoder)": 0.150,
+    "DeBERTaV3 (Paraphrase-Detection Classifier)": 0.875,
+    "PD-BERT (Paraphrase-Detection Classifier)": 0.725
 }
 
 MIN_WORDS = 1
@@ -46,8 +53,10 @@ def split_sentences(text: str):
     text = re.sub(r"''", '', text) 
     text = re.sub(r"(^|(?<=\s))['‘]|['’](?=\s|$|[.,!?;:])", '', text)
 
-    # Provide abbreviation list to prevent nltk from chopping sentences in two
+    # Load nltk for sentence splitting
     tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
+
+    # Provide abbreviation list to prevent nltk from chopping sentences in two
     extra_abbreviations = [
         'et al', 'fig', 'figs', 'eq', 'eqs', 'ref', 'refs', 
         'approx', 'vs', 'phd', 'prof', 'dr', 'mr', 'mrs', 
@@ -56,7 +65,7 @@ def split_sentences(text: str):
     ]
     tokenizer._params.abbrev_types.update(extra_abbreviations)
     
-    # Split into sentences
+    # Split into sentences with nltk
     raw_sents = tokenizer.tokenize(text.strip())
     
     # Define characters for reattaching where sentences are erroneously chopped
@@ -115,7 +124,21 @@ def main():
 
     fig = go.Figure()
 
-    # Loop through models and add a hidden trace for each
+    # Define z-scale steps
+    slidervals = [0.0, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.175, 0.2, 0.225, 0.25, 0.275, 0.3, 0.325, 0.35, 0.375, 0.4, 0.425, 0.45, 0.475, 0.5, 0.525, 0.55, 0.575, 0.6, 0.625, 0.65, 0.675, 0.7, 0.725, 0.75, 0.775, 0.8, 0.825, 0.85, 0.875, 0.9, 0.925, 0.95, 0.975]
+
+    zmin_steps = [
+            dict(method="restyle", args=[{"zmin": val}], label="")
+            for val in slidervals
+        ]
+
+    keytickvals = slidervals + [1.0]
+    keyticktext = [
+        f"<b>{v:.1f}</b>" if i % 4 == 0 else f"{v:.3f}"
+        for i, v in enumerate(keytickvals)
+    ]
+
+    # Loop through transformer models and add a hidden trace for each
     for i, (display_name, model_path) in enumerate(MODELS.items()):
         print(f"Processing {display_name}...")
         model = SentenceTransformer(model_path)
@@ -131,10 +154,15 @@ def main():
             x=essay_labels,
             y=source_labels,
             colorscale='Viridis',
-            zmin=0.0, zmax=1.0,
+            zmin=DEFAULT_ZMINS[display_name], zmax=1.0,
             visible=(i == 0),
             name=display_name,
-            colorbar=dict(title=KEY_LABELS[display_name]),
+            colorbar=dict(
+                title=KEY_LABELS[display_name],
+                tickmode="array",
+                tickvals=keytickvals,
+                ticktext=keyticktext,
+            ),
             hovertemplate="%{x}<br>%{y}<br>Heat: %{z:.3f}<extra></extra>"
         ))
 
@@ -166,25 +194,27 @@ def main():
         visibility = [False] * len(MODELS)
         visibility[i] = True
         
+        default_zmin = DEFAULT_ZMINS[display_name]
+        # Find closest slider index to the default value
+        active_index = min(range(len(slidervals)), key=lambda j: abs(slidervals[j] - default_zmin))
+        
         dropdown_buttons.append(dict(
             label=display_name,
             method="update",
             args=[
-                {"visible": visibility}
+                # 1. Trace updates (visibility list, and applies zmin scalar to all traces)
+                {"visible": visibility, "zmin": default_zmin},
+                # 2. Layout updates (resets the slider thumb visually)
+                {"sliders[0].active": active_index}
             ]
         ))
-
-    # Define noise slider steps
-    vals = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
-
-    zmin_steps = [
-            dict(method="restyle", args=[{"zmin": val}], label=f"{val}") 
-            for val in vals
-        ]
 
     # Render Plotly heatmap
     x_tick_step = max(1, len(essay_labels) // 10)
     y_tick_step = max(1, len(source_labels) // 20)
+
+    initial_model = list(MODELS.keys())[0]
+    initial_active_index = min(range(len(slidervals)), key=lambda j: abs(slidervals[j] - DEFAULT_ZMINS[initial_model]))
 
     fig.update_layout(
         font=dict(family="'Fira Sans', sans-serif", size=13, color="white"),
@@ -210,19 +240,20 @@ def main():
             showactive=True,
             x=-0.06, y=1.12,
             xanchor="left", yanchor="top",
-            bgcolor="#2e3030",
+            bgcolor="#292e30",
             bordercolor="#555",
-            font=dict(size=22, color="white")
+            font=dict(size=26, color="white")
         )],
 
         # Noise slider positioning
         sliders=[dict(
-            active=0,
+            active=initial_active_index,
             currentvalue={"visible": False}, 
             pad={"t": 0, "b": 0},
             x=0.20, len=0.80,
             y=-0.08, yanchor="top",
-            steps=zmin_steps
+            steps=zmin_steps,
+            ticklen=0
         )],
         
         modebar_remove=["resetScale2d", "resetViews"],
@@ -431,7 +462,7 @@ def main():
         </section>
 
         <section class="prose">
-            <h2>Preprocessing</h2>
+            <h2>Text Preprocessing Methodology</h2>
 
             <h3>The Claudeswallop</h3>
 
@@ -456,6 +487,13 @@ def main():
                 <li>Images and their captions were removed from the Schwartz post.</li>
                 <li>Quotation marks were removed (at runtime).</li>
                 <li>The sources were concatenated (at runtime) in the same order that they were listed at the end of The Claudeswallop, which is likely to be the order in which they sat in Claude's context window. However, I believe that this content is not of such a length that position in the context window would make much difference in the context of this analysis in any case.</li>
+            </ul>
+
+            <h2>LLM Use Disclosure</h2>
+            <ul>
+                <li>Gemini 3.1 Pro was used to generate the bulk of the Python code for this project. Google was not renumerated for this inference. The author lives in a GDPR region, where AI Studio use does not contribute to model training. The author does not endorse the use of LLM-generated code in anything beyond small personal projects. (The JavaScript that is output by Plotly for the interactive heatmap is not itself LLM-generated.)</li>
+                <li>Claude 4.6 Sonnet was used to generate CSS and HTML from a Markdown prompt. It was not used to write (or even to 'polish') the prose within. The author does not allow Anthropic to train on his prompts. Anthropic was not renumerated for this inference. The author does not endorse paying for Anthropic products or subjecting human eyes to Claude-generated prose.</li>
+                <li>As stated in the preprocessing methodology, Claude 4.6 Sonnet was prompted to determine likely reversions of the perplexity-fuzzing word repetitions. This was the only LLM use in the preprocessing pipeline. Conversion of the Schwartz article from HTML to Markdown and extraction of text from PDF files was performed using online non-AI tools, and all further edits to the text were made manually by the author.</li>
             </ul>
         </section>
     </main>
