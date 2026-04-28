@@ -330,7 +330,7 @@ def main():
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Anatomy of The Claudeswallop: Sentence Similarity Analysis (Control 2)</title>
+        <title>Anatomy of The Claudeswallop: Sentence Similarity Analysis (Control 3)</title>
         <link href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,600;0,700;1,400&family=Fira+Mono:wght@400;500&display=swap" rel="stylesheet">
         <style>
             :root {{
@@ -465,7 +465,7 @@ def main():
     <body>
 
     <header>
-        <h1>Anatomy of The Claudeswallop (Control 2)</h1>
+        <h1>Anatomy of The Claudeswallop (Control 3)</h1>
     </header>
 
     <main>
