@@ -1,17 +1,25 @@
 import numpy as np
 import plotly.graph_objects as go
 from sentence_transformers import SentenceTransformer, util
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+import torch.nn.functional as F
 import nltk
 import textwrap
 import re
 
-MODELS = {
+ENCODER_MODELS = {
     "MPNet (Semantic Similarity Encoder)": "all-mpnet-base-v2",
     "BGE-M3 (Retrieval-Tuned Encoder)": "BAAI/bge-m3",
     "MiniLM (Paraphrase-Tuned Encoder)": "paraphrase-MiniLM-L6-v2",
-    "DeBERTaV3 (Paraphrase-Detection Classifier)": "domenicrosati/deberta-v3-large-finetuned-paws-paraphrase-detector",
-    "PD-BERT (Paraphrase-Detection Classifier)": "viswadarshan06/pd-bert"
 }
+
+CLASSIFIER_MODELS = {
+    "DeBERTaV3 (Paraphrase-Detection Classifier)": "domenicrosati/deberta-v3-large-finetuned-paws-paraphrase-detector",
+    "PD-BERT (Paraphrase-Detection Classifier)": "viswadarshan06/pd-bert",
+}
+
+MODELS = {**ENCODER_MODELS, **CLASSIFIER_MODELS}
 
 KEY_LABELS = {
     "MPNet (Semantic Similarity Encoder)": "Cosine<br>Similarity",
@@ -92,6 +100,46 @@ def short_label(sentence: str, max_chars: int = 500, wrap_width: int = 40) -> st
     wrapped_text = textwrap.fill(sentence, width=wrap_width)
     return wrapped_text.replace('\n', '<br>')
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def run_classifier(model_path, sents_a, sents_b, batch_size=32):
+    """Returns an (len_a x len_b) matrix of paraphrase probabilities."""
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+    model.eval().to(device)
+
+    id2label = model.config.id2label
+    para_idx = next(
+        (k for k, v in id2label.items() if "paraphrase" in v.lower() and "not" not in v.lower()),
+        1
+    )
+
+    n, m = len(sents_a), len(sents_b)
+    matrix = torch.zeros(n, m)
+    pairs = [(i, j) for i in range(n) for j in range(m)]
+
+    for batch_start in range(0, len(pairs), batch_size):
+        batch_pairs = pairs[batch_start:batch_start + batch_size]
+        texts_a = [sents_a[i] for i, j in batch_pairs]
+        texts_b = [sents_b[j] for i, j in batch_pairs]
+
+        enc = tokenizer(
+            texts_a, texts_b,
+            padding=True, truncation=True,
+            max_length=512, return_tensors="pt"
+        ).to(device)
+
+        with torch.no_grad():
+            logits = model(**enc).logits
+            probs = F.softmax(logits, dim=-1)[:, para_idx]
+
+        for (i, j), p in zip(batch_pairs, probs):
+            matrix[i, j] = p.item()
+
+    del model
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    return matrix.numpy()
+
 def main():
     # Define essay and source text as variables
     essay_sents = split_sentences(ESSAY)
@@ -141,14 +189,16 @@ def main():
     # Loop through transformer models and add a hidden trace for each
     for i, (display_name, model_path) in enumerate(MODELS.items()):
         print(f"Processing {display_name}...")
-        model = SentenceTransformer(model_path)
-        
-        e_embs = model.encode(essay_sents, convert_to_tensor=True)
-        s_embs = model.encode(all_source_sents, convert_to_tensor=True)
-        
-        sim_matrix = util.cos_sim(s_embs, e_embs).cpu().numpy()
-        
-        # Add a heatmap trace
+
+        if display_name in ENCODER_MODELS:
+            model = SentenceTransformer(model_path)
+            e_embs = model.encode(essay_sents, convert_to_tensor=True)
+            s_embs = model.encode(all_source_sents, convert_to_tensor=True)
+            sim_matrix = util.cos_sim(s_embs, e_embs).cpu().numpy()
+        else:
+            sim_matrix = run_classifier(model_path, all_source_sents, essay_sents)
+
+            # Add a heatmap trace
         fig.add_trace(go.Heatmap(
             z=sim_matrix,
             x=essay_labels,
